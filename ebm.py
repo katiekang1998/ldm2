@@ -94,14 +94,16 @@ def plot_hist(savepath, samples, plotting_index, xlim=None, ylim=None):
 def plot_hopper(savepath, hopper_env, samples):
     samples = to_np(samples)
     np.random.shuffle(samples)
-    hopper_env.reset()
-    next_states = []
-    for i in range(8):
-        hopper_env.set_state(np.concatenate([[0], samples[i,:5]]), samples[i,5:11])
-        next_state, _, _, _ = hopper_env.step(samples[i,11:])
-        next_states.append(next_state)
+    # hopper_env.reset()
+    # next_states = []
+    # for i in range(8):
+    #     hopper_env.set_state(np.concatenate([[0], samples[i,:5]]), samples[i,5:11])
+    #     next_state, _, _, _ = hopper_env.step(samples[i,11:])
+    #     next_states.append(next_state)
 
-    images = plot_hopper_states(hopper_env, np.array(next_states))
+    # images = plot_hopper_states(hopper_env, np.array(next_states))
+
+    images = plot_hopper_states(hopper_env, samples[:8, :11])
     fig, ax = plt.subplots(1, 8)
     for i in range(8):
       ax[i].imshow(images[i])
@@ -129,15 +131,15 @@ def plot_hopper_states(hopper_env, states):
 
 ## hyperparameters
 magnitude_coeff = 0.01
-n_langevin_steps = 100
-n_training_steps = 500000
+n_langevin_steps = 1
+n_training_steps = 1
 
 ## just for visualization, probably don't need to change
 n_visualization_samples = int(1e5)
 n_visualization_steps = 1000
 
 device = 'cuda:1'
-logdir = 'data/hopper_mag_coeff_0pt01_stp_sz_0pt01'
+logdir = 'data/hopper_2'
 os.makedirs(logdir, exist_ok=False)
 copyfile("ebm.py", logdir+"/ebm.py")
 
@@ -168,7 +170,19 @@ mins = data.min(dim=0)[0]
 ranges = maxes - mins
 # init_dist = torch.distributions.Uniform(
    # mins - ranges / 2, maxes + ranges / 2)
-init_dist = torch.distributions.MultivariateNormal(data.mean(dim=0), to_torch(cov, device))
+
+# init_dist = torch.distributions.MultivariateNormal(data.mean(dim=0), to_torch(cov, device))
+
+def make_gaussian_dist(data):
+    mean = data.mean(dim=0)
+    e_xx = torch.einsum('bi,bj->bij', data, data).mean(dim=0)
+    mm = torch.einsum('i,j->ij', mean, mean)
+    cov = e_xx - mm
+    init_dist = torch.distributions.MultivariateNormal(loc=mean, covariance_matrix=cov)
+    return init_dist
+
+init_dist = make_gaussian_dist(data) #torch.distributions.MultivariateNormal(data.mean(dim=0), to_torch(cov, device))
+
 
 trainer = EBMPriorTrainer(ebm, init_dist, magnitude_coeff=magnitude_coeff)
 
