@@ -10,14 +10,15 @@ from torch import distributions as pyd
 import math
 import matplotlib
 import copy
+from utils import mlp
 
 class DoubleQCritic(nn.Module):
     """Critic network, employes double Q-learning."""
-    def __init__(self, ebm):
+    def __init__(self, obs_dim, action_dim, hidden_dim, hidden_depth):
         super().__init__()
 
-        self.Q1 = copy.deepcopy(ebm)
-        self.Q2 = copy.deepcopy(ebm)
+        self.Q1 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
+        self.Q2 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
 
         self.outputs = dict()
 
@@ -114,12 +115,11 @@ def soft_update_params(net, target_net, tau):
         target_param.data.copy_(tau * param.data +
                                 (1 - tau) * target_param.data)
 
-class SACAgent():
-    """SAC algorithm."""
+class LDM():
     def __init__(self, obs_dim, action_dim, action_range,
                  actor_lr, actor_betas, critic_lr,
                  critic_betas, critic_tau, critic_target_update_frequency,
-                 batch_size, ebm ):
+                 batch_size, density_model=None):
         super().__init__()
 
         self.action_range = action_range
@@ -128,12 +128,12 @@ class SACAgent():
         self.critic_target_update_frequency = critic_target_update_frequency
         self.obs_dim = obs_dim
 
-        self.critic = DoubleQCritic(ebm).cuda()
-        self.critic_target = DoubleQCritic(ebm).cuda()
+        self.critic = DoubleQCritic(obs_dim, action_dim, 1024, 2).cuda()
+        self.critic_target = DoubleQCritic(obs_dim, action_dim, 1024, 2).cuda()
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         self.actor = DiagGaussianActor(obs_dim, action_dim, 1024, 2, [-5, 2]).cuda()
-        self.ebm = ebm
+        self.density_model = density_model
 
         # optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(),
@@ -163,13 +163,13 @@ class SACAgent():
         return action[0].cpu().detach().numpy()
 
     def update_critic(self, obs, action, reward, next_obs, not_done):
+        
         dist = self.actor(next_obs)
         next_action = dist.rsample()
-        log_prob = dist.log_prob(next_action).sum(-1, keepdim=True)
         target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
-        if self.ebm:
-            ebm_values = self.ebm(torch.cat([next_obs, next_action], dim=1))
-            target_V = torch.min(ebm_values, torch.min(target_Q1, target_Q2))
+        if self.density_model:
+            densities = torch.clamp(self.density_model(torch.cat([next_obs, next_action], dim=1)).detach(), -200, 0)
+            target_V = torch.min(densities, torch.min(target_Q1, target_Q2))
         else:
             target_V = torch.min(target_Q1,
                                  target_Q2) 
@@ -180,53 +180,28 @@ class SACAgent():
         current_Q1, current_Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
             current_Q2, target_Q)
-        print(critic_loss)
-
+        
         # Optimize the critic
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
-
+                                                                                                                                                                                                               
     def update_actor(self, obs):
         dist = self.actor(obs)
         action = dist.rsample()
-        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
         actor_Q1, actor_Q2 = self.critic(obs, action)
-
-        if self.ebm:
-            ebm_values = self.ebm(torch.cat([obs, action], dim=1))
-            actor_Q = torch.min(ebm_values, torch.min(actor_Q1, actor_Q2))
+        if self.density_model:
+            densities = torch.clamp(self.density_model(torch.cat([obs, action], dim=1)).detach(), -200, 0)
+            actor_Q = torch.min(densities, torch.min(actor_Q1, actor_Q2))
         else:
             actor_Q = torch.min(actor_Q1, actor_Q2)
-        actor_loss = ( - actor_Q).mean()
+        actor_loss = (-actor_Q).mean()
 
         # optimize the actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
 
-
-    def plot_values(self, threshold = -6):
-        places_evaluated_np = []
-        for i in range(-310, 320):
-          for j in range(-80, 90):
-            places_evaluated_np.append([0.01*i, 0.1*j])
-        places_evaluated = torch.from_numpy(np.array(places_evaluated_np)).type(torch.FloatTensor).cuda()
-        # places_evaluated_energies = self.critic.Q1(places_evaluated)
-        dist = self.actor(places_evaluated)
-        next_action = dist.rsample()
-        log_prob = dist.log_prob(next_action).sum(-1, keepdim=True)
-        target_Q1, target_Q2 = self.critic_target(places_evaluated, next_action)
-        target_V = torch.min(target_Q1, target_Q2)
-        places_evaluated_energies_np = target_Q1.detach().cpu().numpy().reshape((630, 170))
-
-        masked_V = np.ma.masked_where(places_evaluated_energies_np >= threshold, places_evaluated_energies_np)
-        cmap = matplotlib.cm.viridis
-        cmap.set_bad(color='white')
-
-        plt.imshow(np.transpose(-masked_V), aspect=32./6., cmap='jet')
-        plt.colorbar()
-        plt.show()
 
     def update(self, step, replay_buffer):
         obs, action, reward, next_obs, not_done = replay_buffer.sample(
