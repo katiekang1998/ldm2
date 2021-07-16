@@ -18,11 +18,12 @@ from test import run_closed_loop
 from utils import *
 import csv 
 from sac import SACAgent
+from pendulum_env import PendulumEnv
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 dataset_name = "pendulum"
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/flow_ldms/"+dataset_name+"_pretrain_q2/"
+save_file = "data/flow_ldms/"+dataset_name+"_online/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
@@ -50,6 +51,7 @@ density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt",
 #put data in replay buffer
 rew = np.zeros((len_dataset))
 for i in range(len_dataset//256):
+  print(i)
   rew[i*256:(i+1)*256] = density_model(data[i*256:(i+1)*256, :state_dim+action_dim], return_np=True)
 rew[(len_dataset//256)*256:]=density_model(data[(len_dataset//256)*256:, :state_dim+action_dim], return_np=True)
 
@@ -67,36 +69,56 @@ for i in range(len_dataset):
 # torch.save(model.state_dict(), save_path+"dynamics_model.pt")
 
 # #Train LDM
-with open(save_path+"rollout_length.csv", 'w+') as csvfile: 
-  csvwriter = csv.writer(csvfile) 
-  csvwriter.writerow(["step", "rollout_length"]) 
 
-  print("Training LDM")
-  ldm = LDM(state_dim, action_dim, [-1, 1],
-                   1e-4, [0.9, 0.999], 1e-4,
-                   [0.9, 0.999], 0.005, 2,
-                   1024, density_model=density_model)
+print("Training LDM")
+ldm = LDM(state_dim, action_dim, [-1, 1],
+                 1e-4, [0.9, 0.999], 1e-4,
+                 [0.9, 0.999], 0.005, 2,
+                 1024, density_model=density_model)
 
-  # ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
-  #                1e-4, [0.9, 0.999], 1e-4,
-  #                [0.9, 0.999], 0.005, 2,
-  #                1024)
+# ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
+#                1e-4, [0.9, 0.999], 1e-4,
+#                [0.9, 0.999], 0.005, 2,
+#                1024)
 
-  save_every_n_steps = 2000
-  num_train_steps = 200000
-  for step in range(num_train_steps+1):
-    ldm.update(step, replay_buffer)
-    if step%save_every_n_steps == 0:
-      step_str = f"{step:07}"
-      # rollout_length, _, _, _ = run_closed_loop(ldm)
-      # rollout_length = str(rollout_length)
-      print(step_str)
-      # print(rollout_length)
-      # csvwriter.writerow([step_str, rollout_length]) 
-      torch.save(ldm.actor.state_dict(), save_path+step_str+"actor.pt")
-      torch.save(ldm.critic.state_dict(), save_path+step_str+"critic.pt")
-      torch.save(ldm.critic_target.state_dict(), save_path+step_str+"critic_target.pt")
-      # torch.save(ldm.log_alpha, save_path+step_str+"log_alpha.pt")
+pendulum = PendulumEnv()
+done = True
+
+save_every_n_steps = 2000
+num_train_steps = 200000
+for step in range(num_train_steps+1):
+  ldm.update(step, replay_buffer)
+
+  if done:
+    obs = pendulum.reset()
+    obs = process_pendulum_obs(np.array([obs]))
+    done = False
+    episode_step = 0
+
+
+  # sample action for data collection
+  # import IPython; IPython.embed()
+
+  action = ldm.act(obs, sample=True)
+  next_obs, _, _, _ = pendulum.step(action)
+  next_obs = process_pendulum_obs(np.array([next_obs])).squeeze(-1)
+
+  done = episode_step > 100
+  reward = to_np(density_model(to_torch(np.concatenate([obs, action], axis=1))).squeeze())
+  replay_buffer.add(obs, action, reward, next_obs[0], False)
+
+  obs = next_obs
+  episode_step += 1
+  
+  
+  if step%save_every_n_steps == 0:
+    step_str = f"{step:07}"
+    print(step_str)
+    torch.save(ldm.actor.state_dict(), save_path+step_str+"actor.pt")
+    torch.save(ldm.critic.state_dict(), save_path+step_str+"critic.pt")
+    torch.save(ldm.critic_target.state_dict(), save_path+step_str+"critic_target.pt")
+    # torch.save(ldm.log_alpha, save_path+step_str+"log_alpha.pt")
+  step += 1
 
 
 

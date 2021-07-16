@@ -102,3 +102,68 @@ def plot_samples(savepath, samples):
     }
     renderer.composite(savepath, to_np(samples), dim=(1024, 256), partial = True, qvel=True, render_kwargs=render_kwargs)
 
+def process_pendulum_obs(obs):
+    theta_cos = obs[:, 0]
+    theta_sin = obs[:, 1]
+    theta_dot = obs[:, 2]
+    theta = np.arctan2(theta_sin, theta_cos)
+    return np.stack([theta, theta_dot], axis=1)
+
+def plot_pendulum_densities(density_model):
+    theta_coordinates = np.linspace(-np.pi, np.pi, 100)
+    theta_dot_coordinates = np.linspace(-8, 8, 110)
+    actions_coordinates = np.linspace(-1, 1, 12)
+
+    grid = []
+    for i in theta_coordinates:
+        for j in theta_dot_coordinates:
+            for k in actions_coordinates:
+                grid.append([i, j, k])
+
+    len_dataset = len(grid)
+    data = to_torch(grid)
+    rew = np.zeros(len_dataset)
+    for i in range(len_dataset//256):
+      rew[i*256:(i+1)*256] = density_model(data[i*256:(i+1)*256], return_np=True)
+    rew[(len_dataset//256)*256:]=density_model(data[(len_dataset//256)*256:], return_np=True)
+
+
+    ebm_output = rew.reshape(100, 110, 12)
+    state_ebm_outputs = np.log(np.sum(np.e**ebm_output, axis=2))
+    plt.close()
+    # plt.contourf(theta_coordinates, theta_dot_coordinates, np.transpose(state_ebm_outputs))
+    plt.imshow(state_ebm_outputs, cmap=cm.jet, extent=[theta_coordinates.min(), theta_coordinates.max(), theta_dot_coordinates.min(), theta_dot_coordinates.max()], aspect='auto')
+    plt.gca().invert_yaxis()
+    plt.colorbar()
+    plt.show()
+
+def plot_pendulum_q(critic):
+    theta_coordinates = np.linspace(-np.pi, np.pi, 100)
+    theta_dot_coordinates = np.linspace(-8, 8, 110)
+    actions_coordinates = np.linspace(-1, 1, 12)
+
+    states = []
+    actions = []
+    for i in theta_coordinates:
+        for j in theta_dot_coordinates:
+            for k in actions_coordinates:
+                states.append([i, j])
+                actions.append([k])
+
+    len_dataset = len(actions)
+    states = to_torch(states)
+    actions = to_torch(actions)
+    rew = np.zeros(len_dataset)
+    for i in range(len_dataset//256):
+      rew[i*256:(i+1)*256] = to_np(critic(states[i*256:(i+1)*256], actions[i*256:(i+1)*256])[0]).squeeze()
+    rew[(len_dataset//256)*256:]=to_np(critic(states[(len_dataset//256)*256:], actions[(len_dataset//256)*256:])[0]).squeeze()
+
+
+    ebm_output = rew.reshape(100, 110, 12)
+    state_ebm_outputs = np.log(np.sum(np.e**ebm_output, axis=2))
+    plt.close()
+    # plt.contourf(theta_coordinates, theta_dot_coordinates, np.transpose(state_ebm_outputs))
+    plt.imshow(state_ebm_outputs, cmap=cm.jet, extent=[theta_coordinates.min(), theta_coordinates.max(), theta_dot_coordinates.min(), theta_dot_coordinates.max()], aspect='auto')
+    plt.gca().invert_yaxis()
+    plt.colorbar()
+    plt.show()

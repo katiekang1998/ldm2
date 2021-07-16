@@ -29,9 +29,9 @@ import shutil
 
 logdir = "/home/katie/Desktop/ldm2/data"
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/flows/medium-expert/"
+save_file = "data/flows/pendulum/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
@@ -57,17 +57,24 @@ def plot_hist(savepath, samples, plotting_index, xlim=None, ylim=None):
 	plt.savefig(savepath)
 
 
-#d4rl dataset
-hopper = gym.make('hopper-medium-expert-v2')
-dataset = hopper.get_dataset()
-data = np.concatenate([dataset['observations'], dataset['actions']], axis = 1)
+# #d4rl dataset
+# hopper = gym.make('hopper-expert-v2')
+# dataset = hopper.get_dataset()
+# data = np.concatenate([dataset['observations'], dataset['actions']], axis = 1)
+
+#pendulum dataset
+pkl_file = open('data/pendulum_sac_experts_action_space_1.pkl', 'rb')
+dataset = pickle.load(pkl_file)
+data = np.concatenate([process_pendulum_obs(dataset['observations']), dataset['actions']], axis = 1)
+pkl_file.close()
+
 len_dataset = len(data)
 np.random.shuffle(data)
 
-
-#get plotting indices
-cov = np.cov(data, rowvar=False)
-plotting_indices = np.array(list(zip([_ for _ in range((data).shape[1])], np.argmax(np.argsort(abs(cov)), axis=1))))
+# #get plotting indices
+# cov = np.cov(data, rowvar=False)
+# plotting_indices = np.array(list(zip([_ for _ in range((data).shape[1])], np.argmax(np.argsort(abs(cov)), axis=1))))
+plotting_indices = [[0, 1]]
 
 for i in range(len(plotting_indices)):
 	plot_scatter(os.path.join(save_path, str(i)+'samples_data.png'), data[:10000], plotting_indices[i])
@@ -96,14 +103,19 @@ for epoch in range(1):
 
 		zs, prior_logprob, log_det = model(x)
 		logprob = prior_logprob + log_det
-		loss = -torch.sum(logprob) # NLL
+		loss = torch.clamp(-torch.mean(logprob), -2000, 2000) # NLL
 
 		model.zero_grad()
 		loss.backward()
 		optimizer.step()
 
-		if k % 100 == 0:
+		if k%1000==0:
 			print(loss.item())
+
+		if torch.isnan(loss):
+			import IPython; IPython.embed()
+
+
 
 torch.save(model.state_dict(), save_path+"flow.pt")
 

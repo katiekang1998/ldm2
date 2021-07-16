@@ -40,7 +40,7 @@ class FlowDensityModel(nn.Module):
 
 	def forward(self, x, return_np=False):
 		zs, prior_logprob, log_det = self.model(to_torch(x))
-		logprob = prior_logprob + log_det
+		logprob = prior_logprob + log_det - 50
 
 		if return_np:
 			# batch
