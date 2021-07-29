@@ -50,7 +50,7 @@ density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt",
 
 #put data in replay buffer
 rew = np.zeros((len_dataset))
-for i in range(len_dataset//256):
+for i in range(1000):#len_dataset//256):
   print(i)
   rew[i*256:(i+1)*256] = density_model(data[i*256:(i+1)*256, :state_dim+action_dim], return_np=True)
 rew[(len_dataset//256)*256:]=density_model(data[(len_dataset//256)*256:, :state_dim+action_dim], return_np=True)

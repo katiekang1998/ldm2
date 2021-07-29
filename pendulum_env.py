@@ -55,6 +55,8 @@ class PendulumEnv(gym.Env):
         newthdot = np.clip(newthdot, -self.max_speed, self.max_speed)
 
         self.state = np.array([newth, newthdot])
+
+        
         return self._get_obs(), -costs, False, {}
 
     def reset(self):
