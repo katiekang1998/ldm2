@@ -21,9 +21,9 @@ from sac import SACAgent
 from bc_density_model import BCDensityModel
 
 torch.cuda.set_device(0)
-dataset_name = "expert"
+dataset_name = "medium-expert"
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/bc_ldms/"+dataset_name+"_update_actor_only/"
+save_file = "data/cql/"+dataset_name+"_cql2_lagrange_density_rew/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
@@ -32,8 +32,10 @@ shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patt
 hopper = gym.make('hopper-'+dataset_name+'-v2')
 dataset = hopper.get_dataset()
 data = np.concatenate([dataset['observations'], dataset['actions'], dataset['next_observations']], axis = 1)
+dones = dataset['terminals']
 state_dim = 11
 action_dim = 3
+
 
 # pkl_file = open('data/pendulum_sac_experts_action_space_1.pkl', 'rb')
 # dataset = pickle.load(pkl_file)
@@ -45,8 +47,8 @@ action_dim = 3
 len_dataset = len(data)
 
 #learn density model
-# density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt", state_dim, action_dim)
-density_model = BCDensityModel(ldm_path+"data/bc/"+dataset_name+"/0100000actor.pt", state_dim, action_dim)
+density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt", state_dim, action_dim)
+# density_model = BCDensityModel(ldm_path+"data/bc/"+dataset_name+"/0100000actor.pt", state_dim, action_dim)
 # density_model.plot_samples(save_path)
 
 #put data in replay buffer
@@ -54,11 +56,18 @@ rew = np.zeros((len_dataset))
 for i in range(len_dataset//1024):
   rew[i*1024:(i+1)*1024] = density_model(data[i*1024:(i+1)*1024, :state_dim+action_dim], return_np=True)
 rew[(len_dataset//1024)*1024:]=density_model(data[(len_dataset//1024)*1024:, :state_dim+action_dim], return_np=True)
+# rew = np.clip(rew, -200, 200)
+# min_density = min(rew)
+# std_density = rew.std()
+# threshold = np.percentile(rew, 60)
+# rew = rew > threshold
 
-rew = np.clip(rew, -200, 200)
+
 replay_buffer = ReplayBuffer([state_dim], [action_dim], len_dataset)
 
 for i in range(len_dataset):
+  # if dones[i]:
+  #   rew[i] = min_density - std_density
   replay_buffer.add(data[i][:state_dim], data[i][state_dim: state_dim+action_dim], rew[i], data[i][state_dim+action_dim:], False)
 
 # #Train dynamics model
@@ -74,20 +83,23 @@ with open(save_path+"rollout_length.csv", 'w+') as csvfile:
   csvwriter.writerow(["step", "rollout_length", "density_mean"]) 
 
 print("Training LDM")
-ldm = LDM(state_dim, action_dim, [-1, 1],
-                 1e-4, [0.9, 0.999], 1e-4,
-                 [0.9, 0.999], 0.005, 2,
-                 1024, density_model=density_model)
+# ldm = LDM(state_dim, action_dim, [-1, 1],
+#                  1e-4, [0.9, 0.999], 1e-4,
+#                  [0.9, 0.999], 0.005, 2,
+#                  1024, density_model=density_model, cql_regularizer_coefficient=1)
 
-# ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
-#                1e-4, [0.9, 0.999], 1e-4,
-#                [0.9, 0.999], 0.005, 2,
-#                1024)
+ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
+               1e-4, [0.9, 0.999], 1e-4,
+               [0.9, 0.999], 0.005, 2,
+               1024, with_lagrange=True)
+
+# step_str = f"{98000:07}"
+# ldm.load(save_path+step_str+"actor.pt", save_path+step_str+"critic.pt", save_path+step_str+"critic_target.pt", save_path+step_str+"log_alpha.pt")
 
 save_every_n_steps = 2000
 num_train_steps = 100000
 for step in range(num_train_steps+1):
-  ldm.update_actor_only(step, replay_buffer)
+  ldm.update(step, replay_buffer)
   if step%save_every_n_steps == 0:
     step_str = f"{step:07}"
     rollout_length, state_trajectories, action_trajectories, next_state_trajectories = run_closed_loop(ldm, num_episodes = 10)
@@ -108,7 +120,7 @@ for step in range(num_train_steps+1):
     torch.save(ldm.actor.state_dict(), save_path+step_str+"actor.pt")
     torch.save(ldm.critic.state_dict(), save_path+step_str+"critic.pt")
     torch.save(ldm.critic_target.state_dict(), save_path+step_str+"critic_target.pt")
-    # torch.save(ldm.log_alpha, save_path+step_str+"log_alpha.pt")
+    torch.save(ldm.log_alpha, save_path+step_str+"log_alpha.pt")
 
 
 

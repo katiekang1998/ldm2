@@ -19,11 +19,12 @@ from utils import *
 import csv 
 from sac import SACAgent
 from pendulum_env import PendulumEnv
+from hopper_backwards import HopperBackwardsEnv
 
-torch.cuda.set_device(1)
-dataset_name = "pendulum"
+torch.cuda.set_device(0)
+dataset_name = "hopper-backwards"
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/flow_ldms/"+dataset_name+"_online/"
+save_file = "data/sacs/"+dataset_name+"/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
@@ -32,34 +33,34 @@ shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patt
 # hopper = gym.make('hopper-'+dataset_name+'-v2')
 # dataset = hopper.get_dataset()
 # data = np.concatenate([dataset['observations'], dataset['actions'], dataset['next_observations']], axis = 1)
-# state_dim = 11
-# action_dim = 3
+state_dim = 11
+action_dim = 3
 
-pkl_file = open('data/pendulum_sac_experts_action_space_1.pkl', 'rb')
-dataset = pickle.load(pkl_file)
-data = np.concatenate([process_pendulum_obs(dataset['observations']), dataset['actions'], process_pendulum_obs(dataset['next_observations'])], axis = 1)
-pkl_file.close()
-state_dim = 2
-action_dim = 1
+# pkl_file = open('data/pendulum_sac_experts_action_space_1.pkl', 'rb')
+# dataset = pickle.load(pkl_file)
+# data = np.concatenate([process_pendulum_obs(dataset['observations']), dataset['actions'], process_pendulum_obs(dataset['next_observations'])], axis = 1)
+# pkl_file.close()
+# state_dim = 2
+# action_dim = 1
 
-len_dataset = len(data)
+# len_dataset = len(data)
 
-#learn density model
-density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt", state_dim, action_dim)
-# density_model.plot_samples(save_path)
+# #learn density model
+# density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt", state_dim, action_dim)
+# # density_model.plot_samples(save_path)
 
-#put data in replay buffer
-rew = np.zeros((len_dataset))
-for i in range(1000):#len_dataset//256):
-  print(i)
-  rew[i*256:(i+1)*256] = density_model(data[i*256:(i+1)*256, :state_dim+action_dim], return_np=True)
-rew[(len_dataset//256)*256:]=density_model(data[(len_dataset//256)*256:, :state_dim+action_dim], return_np=True)
+# #put data in replay buffer
+# rew = np.zeros((len_dataset))
+# for i in range(1000):#len_dataset//256):
+#   print(i)
+#   rew[i*256:(i+1)*256] = density_model(data[i*256:(i+1)*256, :state_dim+action_dim], return_np=True)
+# rew[(len_dataset//256)*256:]=density_model(data[(len_dataset//256)*256:, :state_dim+action_dim], return_np=True)
 
-rew = np.clip(rew, -200, 200)
-replay_buffer = ReplayBuffer([state_dim], [action_dim], len_dataset)
+# rew = np.clip(rew, -200, 200)
+# replay_buffer = ReplayBuffer([state_dim], [action_dim], len_dataset)
 
-for i in range(len_dataset):
-  replay_buffer.add(data[i][:state_dim], data[i][state_dim: state_dim+action_dim], rew[i], data[i][state_dim+action_dim:], False)
+# for i in range(len_dataset):
+#   replay_buffer.add(data[i][:state_dim], data[i][state_dim: state_dim+action_dim], rew[i], data[i][state_dim+action_dim:], False)
 
 # #Train dynamics model
 # print("Training model")
@@ -71,27 +72,41 @@ for i in range(len_dataset):
 # #Train LDM
 
 print("Training LDM")
-ldm = LDM(state_dim, action_dim, [-1, 1],
-                 1e-4, [0.9, 0.999], 1e-4,
-                 [0.9, 0.999], 0.005, 2,
-                 1024, density_model=density_model)
+# ldm = LDM(state_dim, action_dim, [-1, 1],
+#                  1e-4, [0.9, 0.999], 1e-4,
+#                  [0.9, 0.999], 0.005, 2,
+#                  1024, density_model=density_model)
 
-# ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
-#                1e-4, [0.9, 0.999], 1e-4,
-#                [0.9, 0.999], 0.005, 2,
-#                1024)
+ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
+               1e-4, [0.9, 0.999], 1e-4,
+               [0.9, 0.999], 0.005, 2,
+               1024)
 
-pendulum = PendulumEnv()
+
+
+# pendulum = PendulumEnv()
+env = HopperBackwardsEnv()
 done = True
 
 save_every_n_steps = 2000
 num_train_steps = 200000
+
+replay_buffer = ReplayBuffer([state_dim], [action_dim], 200000)
+
+
+with open(save_path+"rollout_length.csv", 'w+') as csvfile: 
+  csvwriter = csv.writer(csvfile) 
+  csvwriter.writerow(["step", "rollout_length"]) 
+
+
 for step in range(num_train_steps+1):
-  ldm.update(step, replay_buffer)
+  if step > 5000:
+    ldm.update(step, replay_buffer)
 
   if done:
-    obs = pendulum.reset()
-    obs = process_pendulum_obs(np.array([obs]))
+    # obs = pendulum.reset()
+    # obs = process_pendulum_obs(np.array([obs]))
+    obs = env.reset()
     done = False
     episode_step = 0
 
@@ -100,12 +115,16 @@ for step in range(num_train_steps+1):
   # import IPython; IPython.embed()
 
   action = ldm.act(obs, sample=True)
-  next_obs, _, _, _ = pendulum.step(action)
-  next_obs = process_pendulum_obs(np.array([next_obs])).squeeze(-1)
 
-  done = episode_step > 100
-  reward = to_np(density_model(to_torch(np.concatenate([obs, action], axis=1))).squeeze())
-  replay_buffer.add(obs, action, reward, next_obs[0], False)
+  next_obs, reward, done, failure = env.step(action)
+  next_obs = next_obs.squeeze()
+
+  # next_obs, _, _, _ = pendulum.step(action)
+  # next_obs = process_pendulum_obs(np.array([next_obs])).squeeze(-1)
+
+  # done = episode_step > 100
+  # reward = to_np(density_model(to_torch(np.concatenate([obs, action], axis=1))).squeeze())
+  replay_buffer.add(obs, action, reward, next_obs, done)
 
   obs = next_obs
   episode_step += 1
@@ -114,6 +133,10 @@ for step in range(num_train_steps+1):
   if step%save_every_n_steps == 0:
     step_str = f"{step:07}"
     print(step_str)
+    rollout_length, state_trajectories, action_trajectories, next_state_trajectories = run_closed_loop(ldm, num_episodes = 10)
+    with open(save_path+"rollout_length.csv", 'a') as csvfile: 
+      csvwriter = csv.writer(csvfile) 
+      csvwriter.writerow([step_str, rollout_length]) 
     torch.save(ldm.actor.state_dict(), save_path+step_str+"actor.pt")
     torch.save(ldm.critic.state_dict(), save_path+step_str+"critic.pt")
     torch.save(ldm.critic_target.state_dict(), save_path+step_str+"critic_target.pt")
@@ -122,4 +145,4 @@ for step in range(num_train_steps+1):
 
 
 
-# import IPython; IPython.embed()
+import IPython; IPython.embed()

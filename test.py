@@ -14,6 +14,7 @@ from sac import SACAgent
 from pendulum_env import PendulumEnv
 from policies import ThresholdPolicy
 from bc import BC
+import d4rl
 
 def run_closed_loop(ldm, len_episode=1000, num_episodes = 1, render = False, env = HopperEnv(), policy = None):
 	steps = []
@@ -63,8 +64,8 @@ def run_closed_loop(ldm, len_episode=1000, num_episodes = 1, render = False, env
 if __name__ == "__main__":
 	torch.cuda.set_device(0)
 	ldm_path = "/home/katie/Desktop/ldm2/"
-	experiment = "expert"
-	save_file = "data/bc/"+experiment+"/"
+	experiment = "medium-expert"
+	save_file = "data/flow_ldms/"+experiment+"/"
 	save_path = ldm_path+save_file
 	state_dim = 11
 	action_dim =3
@@ -72,27 +73,37 @@ if __name__ == "__main__":
 	# state_dim = 2
 	# action_dim =1
 
-	step_str = f"{100000:07}"
+	step_str = f"{42000:07}"
 
-	# ldm = LDM(state_dim, action_dim, [-1, 1],
-	#                  1e-4, [0.9, 0.999], 1e-4,
-	#                  [0.9, 0.999], 0.005, 2,
-	#                  1024)
+	ldm = LDM(state_dim, action_dim, [-1, 1],
+	                 1e-4, [0.9, 0.999], 1e-4,
+	                 [0.9, 0.999], 0.005, 2,
+	                 1024)
 
 	# ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
  #         1e-4, [0.9, 0.999], 1e-4,
  #         [0.9, 0.999], 0.005, 2,
  #         1024)
 
-	bc = BC(state_dim, action_dim, [-1, 1], 1e-4, [0.9, 0.999], 1024)
+	# bc = BC(state_dim, action_dim, [-1, 1], 1e-4, [0.9, 0.999], 1024)
 	
-	# ldm.load(save_path+step_str+"actor.pt", save_path+step_str+"critic.pt", save_path+step_str+"critic_target.pt")#, save_path+step_str+"log_alpha.pt")
-	bc.load(save_path+step_str+"actor.pt")
+	ldm.load(save_path+step_str+"actor.pt", save_path+step_str+"critic.pt", save_path+step_str+"critic_target.pt")#, save_path+step_str+"log_alpha.pt")
+	# bc.load(save_path+step_str+"actor.pt")
 
-	# policy = ThresholdPolicy(HopperEnv().action_space, ldm, num_random_actions = 1000, threshold=-45)
+	hopper = gym.make('hopper-'+experiment+'-v2')
+	dataset = hopper.get_dataset()
+	data = np.concatenate([dataset['observations'], dataset['actions'], dataset['next_observations']], axis = 1)
+	density_model = FlowDensityModel(ldm_path+"data/flows/"+experiment+"/flow.pt", state_dim, action_dim)
+	rew=density_model(data[:1024, :state_dim+action_dim], return_np=True)
+	rew = np.clip(rew, -200, 200)
+	threshold = np.percentile(rew, 40)
+	print(threshold)
+
+
+	policy = ThresholdPolicy(HopperEnv().action_space, ldm, num_random_actions = 5000, threshold=threshold)
 
 	# import IPython; IPython.embed()
-	rollout_length_mean, state_trajectories, action_trajectories, next_state_trajectories = run_closed_loop(bc, len_episode=1000, render=True, env=HopperEnv(), num_episodes = 10) #, policy=policy)
+	rollout_length_mean, state_trajectories, action_trajectories, next_state_trajectories = run_closed_loop(ldm, len_episode=1000, render=True, env=HopperEnv(), num_episodes = 10, policy=policy)
 	
 	for i in range(len(state_trajectories)):
 		density_model = FlowDensityModel(ldm_path+"data/flows/"+experiment+"/flow.pt", state_dim, action_dim)

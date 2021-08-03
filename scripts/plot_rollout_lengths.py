@@ -4,7 +4,7 @@ import csv
 
 
 data_path = "/home/katie/Desktop/ldm2/data/"
-folders = ["flow_ldms/expert", "flow_ldms/expert_cql2_1", "flow_ldms/expert_ground_truth_density_model_update_actor_only", "bc/expert", "bc_ldms/expert", "bc_ldms/expert_cql2_1", "bc_ldms/expert_update_actor_only"]
+folders = ["flow_ldms/medium-expert3", "flow_ldms/medium-replay_relabeled_done"]
 
 for folder in folders:
 	rollout_lengths = []

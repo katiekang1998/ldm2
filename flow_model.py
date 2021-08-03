@@ -29,9 +29,9 @@ import shutil
 
 logdir = "/home/katie/Desktop/ldm2/data"
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/flows/random/"
+save_file = "data/flows/medium-replay2/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
@@ -58,7 +58,7 @@ def plot_hist(savepath, samples, plotting_index, xlim=None, ylim=None):
 
 
 #d4rl dataset
-hopper = gym.make('hopper-random-v2')
+hopper = gym.make('hopper-medium-replay-v2')
 dataset = hopper.get_dataset()
 data = np.concatenate([dataset['observations'], dataset['actions']], axis = 1)
 
@@ -99,39 +99,39 @@ optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5) # todo tu
 print("number of params: ", sum(p.numel() for p in model.parameters()))
 
 model.train()
-# for epoch in range(8):
-for k in range(300):
-	x = torch.from_numpy(data[k*1028:(k+1)*1028].astype(np.float32)).cuda()
+for epoch in range(8):
+	for k in range(len(data)//1028):
+		x = torch.from_numpy(data[k*1028:(k+1)*1028].astype(np.float32)).cuda()
 
-	zs, prior_logprob, log_det = model(x)
-	logprob = prior_logprob + log_det
-	loss = torch.clamp(-torch.mean(logprob), -2000, 2000) # NLL
+		zs, prior_logprob, log_det = model(x)
+		logprob = prior_logprob + log_det
+		loss = torch.clamp(-torch.mean(logprob), -2000, 2000) # NLL
 
-	optimizer.zero_grad()
-	loss.backward()
-	optimizer.step()
+		optimizer.zero_grad()
+		loss.backward()
+		optimizer.step()
 
-	print(loss.item())
+		print(loss.item())
 
-	if torch.isnan(loss):
-		import IPython; IPython.embed()
+		if torch.isnan(loss):
+			import IPython; IPython.embed()
 
-	# if k%100==0:
-	# 	samples = model.sample(1000)[-1].detach().cpu().numpy()
-	# 	for i in range(len(plotting_indices)):
-	# 		plot_scatter(os.path.join(save_path, str(i)+'samples_flow.png'), samples[:1000], plotting_indices[i])
-	# 		plot_hist(os.path.join(save_path, str(i)+'hist_flow.png'), samples[:1000], plotting_indices[i])
-	# 	plot_samples(os.path.join(save_path, f'hoppers{k:05}.png'), np.array(samples)[:256,:11])
+		# if k%100==0:
+		# 	samples = model.sample(1000)[-1].detach().cpu().numpy()
+		# 	for i in range(len(plotting_indices)):
+		# 		plot_scatter(os.path.join(save_path, str(i)+'samples_flow.png'), samples[:1000], plotting_indices[i])
+		# 		plot_hist(os.path.join(save_path, str(i)+'hist_flow.png'), samples[:1000], plotting_indices[i])
+		# 	plot_samples(os.path.join(save_path, f'hoppers{k:05}.png'), np.array(samples)[:256,:11])
 
 
 
 torch.save(model.state_dict(), save_path+"flow.pt")
 
-samples = model.sample(1000)[-1].detach().cpu().numpy()
+samples = model.sample(10000)[-1].detach().cpu().numpy()
 
 
 for i in range(len(plotting_indices)):
-	plot_scatter(os.path.join(save_path, str(i)+'samples_flow.png'), samples[:1000], plotting_indices[i])
+	plot_scatter(os.path.join(save_path, str(i)+'samples_flow.png'), samples, plotting_indices[i])
 	plot_hist(os.path.join(save_path, str(i)+'hist_flow.png'), samples[:1000], plotting_indices[i])
 
 

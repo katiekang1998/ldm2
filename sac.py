@@ -120,7 +120,7 @@ class SACAgent():
     def __init__(self, obs_dim, action_dim, action_range, discount,
                  actor_lr, actor_betas, critic_lr,
                  critic_betas, critic_tau, critic_target_update_frequency,
-                 batch_size, init_temperature= 0.1, alpha_lr= 1e-4, alpha_betas= [0.9, 0.999]):
+                 batch_size, init_temperature= 0.1, alpha_lr= 1e-4, alpha_betas= [0.9, 0.999], cql_regularizer_coefficient=0, with_lagrange=False):
         super().__init__()
 
         self.action_range = action_range
@@ -129,6 +129,8 @@ class SACAgent():
         self.batch_size = batch_size
         self.critic_target_update_frequency = critic_target_update_frequency
         self.obs_dim = obs_dim
+        self.action_dim = action_dim
+        self.cql_regularizer_coefficient = cql_regularizer_coefficient
 
         self.critic = DoubleQCritic(obs_dim, action_dim, 1024, 2).cuda()
         self.critic_target = DoubleQCritic(obs_dim, action_dim, 1024, 2).cuda()
@@ -141,9 +143,20 @@ class SACAgent():
         # set target entropy to -|A|
         self.target_entropy = -action_dim
 
+
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha],
                                                     lr=alpha_lr,
                                                     betas=alpha_betas)
+
+        self.with_lagrange = with_lagrange
+        if self.with_lagrange:
+            self.log_alpha_prime = torch.tensor(np.log(1)).cuda()
+            self.log_alpha_prime.requires_grad = True
+            self.alpha_prime_optimizer = torch.optim.Adam(
+                [self.log_alpha_prime],
+                lr=alpha_lr,
+                betas=alpha_betas
+            )
 
         # optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(),
@@ -175,6 +188,35 @@ class SACAgent():
         # assert action.ndim == 2 and action.shape[0] == 1
         return action[0].cpu().detach().numpy()
 
+    def cql_regularizer(self, obs, action):
+
+        data_Q_1, data_Q_2 = self.critic(obs, action)
+        #batch x 1
+        
+        num_random_samples = 10
+
+        curr_policy_action_dist = self.actor(obs)
+        # curr_policy_action 10 x 1024 x 3
+        curr_policy_action = curr_policy_action_dist.rsample(sample_shape=torch.Size([num_random_samples]))
+        # curr_policy_action_log_prob 10 x 1024 x 1
+        curr_policy_action_log_prob = curr_policy_action_dist.log_prob(curr_policy_action).sum(-1, keepdim=True)
+
+
+        random_action = torch.FloatTensor(num_random_samples, len(obs), self.action_dim).uniform_(-1, 1).cuda()
+        random_action_log_prob = np.log(0.5 ** self.action_dim)
+
+        q1_rand, q2_rand = self.critic(obs.repeat([10, 1, 1]), random_action)
+        q1_curr_actions, q2_curr_actions = self.critic(obs.repeat([10, 1, 1]), curr_policy_action)
+
+        cat_q1 = torch.cat([q1_rand - random_action_log_prob, q1_curr_actions - curr_policy_action_log_prob.detach()], 0)
+        cat_q2 = torch.cat([q2_rand - random_action_log_prob, q2_curr_actions - curr_policy_action_log_prob.detach()], 0)
+            
+        min_qf1_loss = torch.logsumexp(cat_q1, dim=0,)
+        min_qf2_loss = torch.logsumexp(cat_q2, dim=0,)
+        # batch x 1
+
+        return torch.mean((min_qf1_loss-data_Q_1)), torch.mean((min_qf2_loss-data_Q_2))
+
 
     def update_critic(self, obs, action, reward, next_obs, not_done):
         dist = self.actor(next_obs)
@@ -189,6 +231,25 @@ class SACAgent():
         current_Q1, current_Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
             current_Q2, target_Q)
+
+        min_qf1_loss, min_qf2_loss = self.cql_regularizer(obs, action)
+        if self.with_lagrange:
+            alpha_prime = torch.clamp(self.log_alpha_prime.exp(), min=0.0, max=1000000.0)
+            print(alpha_prime)
+            min_qf1_loss = alpha_prime * (min_qf1_loss)
+            min_qf2_loss = alpha_prime * (min_qf2_loss)
+            cql_loss = min_qf1_loss+min_qf2_loss
+        else:
+            cql_loss = self.cql_regularizer_coefficient*(min_qf1_loss+min_qf2_loss)
+
+
+        critic_loss+=cql_loss
+
+        if self.with_lagrange:
+            self.alpha_prime_optimizer.zero_grad()
+            alpha_prime_loss = (-min_qf1_loss - min_qf2_loss)*0.5 
+            alpha_prime_loss.backward(retain_graph=True)
+            self.alpha_prime_optimizer.step()
 
         # Optimize the critic
         self.critic_optimizer.zero_grad()
