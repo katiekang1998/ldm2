@@ -20,10 +20,10 @@ import csv
 from sac import SACAgent
 from bc_density_model import BCDensityModel
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 dataset_name = "medium-expert"
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/cql/"+dataset_name+"_cql2_lagrange_density_rew/"
+save_file = "data/cql/"+dataset_name+"_cql2_1_threshold_40_lagrange_delete2/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
@@ -59,8 +59,8 @@ rew[(len_dataset//1024)*1024:]=density_model(data[(len_dataset//1024)*1024:, :st
 # rew = np.clip(rew, -200, 200)
 # min_density = min(rew)
 # std_density = rew.std()
-# threshold = np.percentile(rew, 60)
-# rew = rew > threshold
+threshold = np.percentile(rew, 40)
+rew = rew > threshold
 
 
 replay_buffer = ReplayBuffer([state_dim], [action_dim], len_dataset)
@@ -97,8 +97,8 @@ ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
 # ldm.load(save_path+step_str+"actor.pt", save_path+step_str+"critic.pt", save_path+step_str+"critic_target.pt", save_path+step_str+"log_alpha.pt")
 
 save_every_n_steps = 2000
-num_train_steps = 100000
-for step in range(num_train_steps+1):
+num_train_steps = 150000
+for step in range(num_train_steps):
   ldm.update(step, replay_buffer)
   if step%save_every_n_steps == 0:
     step_str = f"{step:07}"

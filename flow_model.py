@@ -31,7 +31,7 @@ logdir = "/home/katie/Desktop/ldm2/data"
 
 torch.cuda.set_device(0)
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/flows/medium-replay2/"
+save_file = "data/flows/forwards-backwards-replay/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
@@ -60,27 +60,31 @@ def plot_hist(savepath, samples, plotting_index, xlim=None, ylim=None):
 #d4rl dataset
 hopper = gym.make('hopper-medium-replay-v2')
 dataset = hopper.get_dataset()
-data = np.concatenate([dataset['observations'], dataset['actions']], axis = 1)
+data_orig = np.concatenate([dataset['observations'], dataset['actions']], axis = 1)
+np.random.shuffle(data_orig)
+data = data_orig[:190000]
+holdout_data = data_orig[190000:200000]
+print(holdout_data.shape)
 
-# #pendulum dataset
-# pkl_file = open('data/pendulum_sac_experts_action_space_1.pkl', 'rb')
-# dataset = pickle.load(pkl_file)
-# data = np.concatenate([process_pendulum_obs(dataset['observations']), dataset['actions']], axis = 1)
-# pkl_file.close()
+pkl_file = open(ldm_path+'data/hopper_backwards_replay.pkl', 'rb')
+dataset = pickle.load(pkl_file)
+data2 = np.concatenate([dataset['observations'], dataset['actions']], axis = 1)
+pkl_file.close()
 
-len_dataset = len(data)
+data = np.concatenate([data, data2[:190000]])
+holdout_data = np.concatenate([holdout_data, data2[190000:]])
+print(holdout_data.shape)
 np.random.shuffle(data)
+np.random.shuffle(holdout_data)
+import IPython; IPython.embed()
 
 #get plotting indices
 cov = np.cov(data, rowvar=False)
 plotting_indices = np.array(list(zip([_ for _ in range((data).shape[1])], np.argmax(np.argsort(abs(cov)), axis=1))))
-# plotting_indices = [[0, 1]]
 
 for i in range(len(plotting_indices)):
 	plot_scatter(os.path.join(save_path, str(i)+'samples_data.png'), data[:10000], plotting_indices[i])
 	plot_hist(os.path.join(save_path, str(i)+'hist_data.png'), data[:10000], plotting_indices[i])
-
-plot_samples(os.path.join(save_path, 'hoppers_data.png'), data[:256,:11])
 
 prior = TransformedDistribution(Uniform(torch.zeros(len(data[0])).cuda(), torch.ones(len(data[0])).cuda()), SigmoidTransform().inv) # Logistic distribution
 
@@ -99,40 +103,36 @@ optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5) # todo tu
 print("number of params: ", sum(p.numel() for p in model.parameters()))
 
 model.train()
-for epoch in range(8):
-	for k in range(len(data)//1028):
-		x = torch.from_numpy(data[k*1028:(k+1)*1028].astype(np.float32)).cuda()
+for epoch in range(2):
+	for k in range(len(data)//128):
+		x = torch.from_numpy(data[k*128:(k+1)*128].astype(np.float32)).cuda()
 
 		zs, prior_logprob, log_det = model(x)
 		logprob = prior_logprob + log_det
-		loss = torch.clamp(-torch.mean(logprob), -2000, 2000) # NLL
+		loss = -torch.sum(logprob) # NLL
 
-		optimizer.zero_grad()
+		model.zero_grad()
 		loss.backward()
 		optimizer.step()
 
-		print(loss.item())
-
-		if torch.isnan(loss):
-			import IPython; IPython.embed()
-
-		# if k%100==0:
-		# 	samples = model.sample(1000)[-1].detach().cpu().numpy()
-		# 	for i in range(len(plotting_indices)):
-		# 		plot_scatter(os.path.join(save_path, str(i)+'samples_flow.png'), samples[:1000], plotting_indices[i])
-		# 		plot_hist(os.path.join(save_path, str(i)+'hist_flow.png'), samples[:1000], plotting_indices[i])
-		# 	plot_samples(os.path.join(save_path, f'hoppers{k:05}.png'), np.array(samples)[:256,:11])
-
-
+		if k % 128 == 0:
+			print("loss")
+			print(loss.item())
+			x = torch.from_numpy(holdout_data[k%10000:k%10000+128].astype(np.float32)).cuda()
+			zs, prior_logprob, log_det = model(x)
+			logprob = prior_logprob + log_det
+			loss = -torch.sum(logprob) # NLL
+			print("holdout loss")
+			print(loss.item())
 
 torch.save(model.state_dict(), save_path+"flow.pt")
 
-samples = model.sample(10000)[-1].detach().cpu().numpy()
+samples = model.sample(1000)[-1].detach().cpu().numpy()
 
 
 for i in range(len(plotting_indices)):
-	plot_scatter(os.path.join(save_path, str(i)+'samples_flow.png'), samples, plotting_indices[i])
+	plot_scatter(os.path.join(save_path, str(i)+'samples_flow.png'), samples[:1000], plotting_indices[i])
 	plot_hist(os.path.join(save_path, str(i)+'hist_flow.png'), samples[:1000], plotting_indices[i])
 
 
-plot_samples(os.path.join(save_path, 'hoppers.png'), np.array(samples)[:256,:11])
+plot_samples(os.path.join(save_path, 'samples.png'), np.array(samples)[:256,:11])

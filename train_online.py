@@ -22,17 +22,17 @@ from pendulum_env import PendulumEnv
 from hopper_backwards import HopperBackwardsEnv
 
 torch.cuda.set_device(0)
-dataset_name = "hopper-backwards"
+dataset_name = "expert"
 ldm_path = "/home/katie/Desktop/ldm2/"
-save_file = "data/sacs/"+dataset_name+"/"
+save_file = "data/flow_ldms_online/"+dataset_name+"/"
 save_path = ldm_path+save_file
 shutil.copytree(ldm_path, save_path+"training_files/", ignore=shutil.ignore_patterns("data"))
 
 
 # #d4rl dataset
-# hopper = gym.make('hopper-'+dataset_name+'-v2')
-# dataset = hopper.get_dataset()
-# data = np.concatenate([dataset['observations'], dataset['actions'], dataset['next_observations']], axis = 1)
+hopper = gym.make('hopper-'+dataset_name+'-v2')
+dataset = hopper.get_dataset()
+data = np.concatenate([dataset['observations'], dataset['actions'], dataset['next_observations']], axis = 1)
 state_dim = 11
 action_dim = 3
 
@@ -43,24 +43,24 @@ action_dim = 3
 # state_dim = 2
 # action_dim = 1
 
-# len_dataset = len(data)
+len_dataset = len(data)
 
-# #learn density model
-# density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt", state_dim, action_dim)
+#learn density model
+density_model = FlowDensityModel(ldm_path+"data/flows/"+dataset_name+"/flow.pt", state_dim, action_dim)
 # # density_model.plot_samples(save_path)
 
-# #put data in replay buffer
-# rew = np.zeros((len_dataset))
-# for i in range(1000):#len_dataset//256):
-#   print(i)
-#   rew[i*256:(i+1)*256] = density_model(data[i*256:(i+1)*256, :state_dim+action_dim], return_np=True)
+#put data in replay buffer
+rew = np.zeros((len_dataset))
+for i in range(len_dataset//256):
+  print(i)
+  rew[i*256:(i+1)*256] = density_model(data[i*256:(i+1)*256, :state_dim+action_dim], return_np=True)
 # rew[(len_dataset//256)*256:]=density_model(data[(len_dataset//256)*256:, :state_dim+action_dim], return_np=True)
 
-# rew = np.clip(rew, -200, 200)
-# replay_buffer = ReplayBuffer([state_dim], [action_dim], len_dataset)
+rew = np.clip(rew, -200, 200)
+replay_buffer = ReplayBuffer([state_dim], [action_dim], len_dataset)
 
-# for i in range(len_dataset):
-#   replay_buffer.add(data[i][:state_dim], data[i][state_dim: state_dim+action_dim], rew[i], data[i][state_dim+action_dim:], False)
+for i in range(len_dataset):
+  replay_buffer.add(data[i][:state_dim], data[i][state_dim: state_dim+action_dim], rew[i], data[i][state_dim+action_dim:], False)
 
 # #Train dynamics model
 # print("Training model")
@@ -72,26 +72,25 @@ action_dim = 3
 # #Train LDM
 
 print("Training LDM")
-# ldm = LDM(state_dim, action_dim, [-1, 1],
-#                  1e-4, [0.9, 0.999], 1e-4,
-#                  [0.9, 0.999], 0.005, 2,
-#                  1024, density_model=density_model)
+ldm = LDM(state_dim, action_dim, [-1, 1],
+                 1e-4, [0.9, 0.999], 1e-4,
+                 [0.9, 0.999], 0.005, 2,
+                 1024, density_model=density_model)
 
-ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
-               1e-4, [0.9, 0.999], 1e-4,
-               [0.9, 0.999], 0.005, 2,
-               1024)
+# ldm = SACAgent(state_dim, action_dim, [-1, 1], 0.99,
+#                1e-4, [0.9, 0.999], 1e-4,
+#                [0.9, 0.999], 0.005, 2,
+#                1024)
 
 
 
 # pendulum = PendulumEnv()
-env = HopperBackwardsEnv()
+env = HopperEnv()
 done = True
 
 save_every_n_steps = 2000
 num_train_steps = 200000
 
-replay_buffer = ReplayBuffer([state_dim], [action_dim], 200000)
 
 
 with open(save_path+"rollout_length.csv", 'w+') as csvfile: 
@@ -100,8 +99,7 @@ with open(save_path+"rollout_length.csv", 'w+') as csvfile:
 
 
 for step in range(num_train_steps+1):
-  if step > 5000:
-    ldm.update(step, replay_buffer)
+  ldm.update(step, replay_buffer)
 
   if done:
     # obs = pendulum.reset()
@@ -122,13 +120,13 @@ for step in range(num_train_steps+1):
   # next_obs, _, _, _ = pendulum.step(action)
   # next_obs = process_pendulum_obs(np.array([next_obs])).squeeze(-1)
 
-  # done = episode_step > 100
-  # reward = to_np(density_model(to_torch(np.concatenate([obs, action], axis=1))).squeeze())
-  replay_buffer.add(obs, action, reward, next_obs, done)
+  done = done or episode_step > 1000
+  reward = to_np(density_model(to_torch([np.concatenate([obs, action])])).squeeze())
+  reward = np.clip(reward, -200, 200)
+  replay_buffer.add(obs, action, reward, next_obs, False)
 
   obs = next_obs
   episode_step += 1
-  
   
   if step%save_every_n_steps == 0:
     step_str = f"{step:07}"

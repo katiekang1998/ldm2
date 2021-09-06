@@ -189,12 +189,11 @@ class LDM():
         return action[0].cpu().detach().numpy()
 
     def update_critic(self, obs, action, reward, next_obs, not_done):
-        
         dist = self.actor(next_obs)
         next_action = dist.rsample()
         target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
         if self.density_model:
-            densities = torch.clamp(self.density_model(torch.cat([next_obs, next_action], dim=1)), -200, 200)
+            densities = torch.clamp(self.density_model(torch.cat([next_obs, next_action], dim=1)), -200, 200).detach()
             target_V = torch.min(densities, torch.min(target_Q1, target_Q2))
         else:
             target_V = torch.min(target_Q1,
@@ -207,7 +206,8 @@ class LDM():
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
             current_Q2, target_Q)
 
-        critic_loss+=self.cql_regularizer_coefficient*self.cql_regularizer(obs, action)
+        if self.cql_regularizer_coefficient > 0:
+            critic_loss+=self.cql_regularizer_coefficient*self.cql_regularizer(obs, action)
         
         # Optimize the critic
         self.critic_optimizer.zero_grad()
@@ -216,19 +216,26 @@ class LDM():
                                                                                                                                                                                                                
     def update_actor(self, obs):
         dist = self.actor(obs)
+
         action = dist.rsample()
         actor_Q1, actor_Q2 = self.critic(obs, action)
-        if self.density_model:
-            densities = torch.clamp(self.density_model(torch.cat([obs, action], dim=1)), -200, 200)
-            actor_Q = torch.min(densities, torch.min(actor_Q1, actor_Q2))
-        else:
-            actor_Q = torch.min(actor_Q1, actor_Q2)
+        # if self.density_model:
+        #     densities = torch.clamp(self.density_model(torch.cat([obs, action], dim=1)), -200, 200).detach()
+        #     actor_Q = torch.min(densities, torch.min(actor_Q1, actor_Q2))
+        # else:
+            
+        actor_Q = torch.min(actor_Q1, actor_Q2)
         actor_loss = (-actor_Q).mean()
 
         # optimize the actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
+
+        dist = self.actor(obs)
+        if torch.isnan(torch.max(dist.loc)):
+            import IPython; IPython.embed()
+
 
     def update_actor_with_density_model(self, obs):
         dist = self.actor(obs)

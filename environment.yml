@@ -1,0 +1,5 @@
+name: ldm
+channels:
+  - defaults
+prefix: /home/katie/anaconda3/envs/ldm
+
